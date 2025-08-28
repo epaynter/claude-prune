@@ -187,4 +187,4 @@ Contributions welcome! The codebase is well-tested and documented. Please ensure
 
 ## License
 
-MIT
+MIT © Eliot Paynter
