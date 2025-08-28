@@ -140,7 +140,7 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
 
 // ---------- Main ----------
 async function main(sessionId: string, opts: { keep?: number; dryRun?: boolean; nonInteractive?: boolean }) {
-  const cwdProject = process.cwd().replace(/\//g, '-');
+  const cwdProject = process.cwd().replace(/\//g, '-').replace(/ /g, '-');
   const file = join(homedir(), ".claude", "projects", cwdProject, `${sessionId}.jsonl`);
 
   if (!(await fs.pathExists(file))) {
@@ -292,7 +292,7 @@ export function findLatestBackup(backupFiles: string[], sessionId: string): { na
 
 // ---------- Restore ----------
 async function restore(sessionId: string, opts: { dryRun?: boolean }) {
-  const cwdProject = process.cwd().replace(/\//g, '-');
+  const cwdProject = process.cwd().replace(/\//g, '-').replace(/ /g, '-');
   const file = join(homedir(), ".claude", "projects", cwdProject, `${sessionId}.jsonl`);
   const backupDir = join(homedir(), ".claude", "projects", cwdProject, "prune-backup");
 

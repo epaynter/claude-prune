@@ -1,9 +1,11 @@
 {
-  "name": "claude-prune",
-  "version": "2.0.0",
+  "name": "@epaynter/claude-prune",
+  "version": "2.0.1",
   "description": "Intelligent context management for Claude Code sessions with interactive pruning strategies",
   "author": "Eliot Paynter <your-email@example.com> (https://github.com/epaynter)",
-  "contributors": ["Danny Aziz (original author)"],
+  "contributors": [
+    "Danny Aziz (original author)"
+  ],
   "license": "MIT",
   "keywords": [
     "claude",
