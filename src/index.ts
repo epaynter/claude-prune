@@ -6,19 +6,23 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { confirm } from "@clack/prompts";
+import { SessionAnalyzer } from "./analyzer";
+import { InteractiveUI } from "./interactive";
+import { SmartPruner } from "./pruner";
 
 // ---------- CLI Definition ----------
 const program = new Command()
   .name("claude-prune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("1.1.0");
+  .version("2.0.0");
 
 program
   .command("prune")
-  .description("Prune early messages from a session")
+  .description("Intelligently prune messages from a Claude session")
   .argument("<sessionId>", "UUID of the session (without .jsonl)")
-  .requiredOption("-k, --keep <number>", "number of *message* objects to keep", parseInt)
+  .option("-k, --keep <number>", "number of messages to keep (legacy mode)", parseInt)
   .option("--dry-run", "show what would happen but don't write")
+  .option("--non-interactive", "skip interactive mode, use auto strategy")
   .action(main);
 
 program
@@ -28,13 +32,14 @@ program
   .option("--dry-run", "show what would be restored but don't write")
   .action(restore);
 
-// For backward compatibility, make prune the default command
+// Default command - run prune interactively
 program
   .argument("[sessionId]", "UUID of the session (without .jsonl)")
-  .option("-k, --keep <number>", "number of *message* objects to keep", parseInt)
+  .option("-k, --keep <number>", "number of messages to keep (legacy mode)", parseInt)
   .option("--dry-run", "show what would happen but don't write")
+  .option("--non-interactive", "skip interactive mode, use auto strategy")
   .action((sessionId, opts) => {
-    if (sessionId && opts.keep) {
+    if (sessionId) {
       main(sessionId, opts);
     } else {
       program.help();
@@ -134,7 +139,7 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep: number; dryRun?: boolean }) {
+async function main(sessionId: string, opts: { keep?: number; dryRun?: boolean; nonInteractive?: boolean }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(homedir(), ".claude", "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -143,33 +148,132 @@ async function main(sessionId: string, opts: { keep: number; dryRun?: boolean })
     process.exit(1);
   }
 
-  // Dry-run confirmation via clack if user forgot --dry-run flag
-  if (!opts.dryRun && process.stdin.isTTY) {
-    const ok = await confirm({ message: chalk.yellow("Overwrite original file?"), initialValue: true });
-    if (!ok) process.exit(0);
-  }
-
-  const spinner = ora(`Reading ${file}`).start();
+  // Cool glitch loading animation
+  const spinner = ora({
+    text: chalk.gray('⟨⟨ ANALYZING ⟩⟩'),
+    spinner: {
+      interval: 80,
+      frames: [
+        '[█▒▒▒▒▒▒▒▒▒]',
+        '[██▒▒▒▒▒▒▒▒]',
+        '[███▒▒▒▒▒▒▒]',
+        '[████▒▒▒▒▒▒]',
+        '[█████▒▒▒▒▒]',
+        '[██████▒▒▒▒]',
+        '[███████▒▒▒]',
+        '[████████▒▒]',
+        '[█████████▒]',
+        '[██████████]'
+      ]
+    }
+  }).start();
+  
   const raw = await fs.readFile(file, "utf8");
   const lines = raw.split(/\r?\n/).filter(Boolean);
+  
+  // Quick flash through the scan
+  await new Promise(resolve => setTimeout(resolve, 600));
+  spinner.succeed(chalk.gray('⟨⟨ ') + chalk.green('COMPLETE') + chalk.gray(' ⟩⟩'));
 
-  const { outLines, kept, dropped, assistantCount } = pruneSessionLines(lines, opts.keep);
+  let result: { outLines: string[]; kept: number; dropped: number; strategy: string };
 
-  spinner.succeed(`${chalk.green("Scanned")} ${lines.length} lines (${kept} kept, ${dropped} dropped) - ${assistantCount} assistant messages found`);
+  // Legacy mode: use -k flag
+  if (opts.keep) {
+    const legacyResult = pruneSessionLines(lines, opts.keep);
+    result = {
+      outLines: legacyResult.outLines,
+      kept: legacyResult.kept,
+      dropped: legacyResult.dropped,
+      strategy: `Legacy: keep last ${opts.keep} assistant messages`
+    };
+    
+    console.log(chalk.yellow("\nUsing legacy mode. Run without -k flag for interactive pruning.\n"));
+    console.log(`${chalk.green("Scanned")} ${lines.length} lines`);
+    console.log(`Will keep ${result.kept} messages, drop ${result.dropped}`);
+    
+    if (!opts.dryRun && process.stdin.isTTY) {
+      const ok = await confirm({ message: chalk.yellow("Proceed?"), initialValue: true });
+      if (!ok) process.exit(0);
+    }
+  } 
+  // New interactive mode
+  else {
+    const analyzer = new SessionAnalyzer(lines);
+    
+    if (opts.nonInteractive) {
+      // Auto mode: use smart default strategy
+      const messageIndices = analyzer.getMessageIndices();
+      const totalMessages = messageIndices.length;
+      const recentStart = Math.floor(totalMessages * 0.4);
+      const indicesToKeep = messageIndices.slice(recentStart);
+      
+      const pruner = new SmartPruner(lines);
+      result = pruner.pruneWithIndices(indicesToKeep, "Auto: recent work");
+      
+      console.log(`\nAuto-pruning: keeping messages ${recentStart + 1}-${totalMessages}`);
+      console.log(`Will keep ${result.kept} messages, drop ${result.dropped}\n`);
+      
+      if (!opts.dryRun && process.stdin.isTTY) {
+        const ok = await confirm({ message: chalk.yellow("Proceed?"), initialValue: true });
+        if (!ok) process.exit(0);
+      }
+    } else {
+      // Interactive mode
+      const ui = new InteractiveUI(analyzer);
+      const selection = await ui.selectStrategy();
+      
+      if (!selection) {
+        console.log(chalk.yellow("Cancelled"));
+        process.exit(0);
+      }
+      
+      const pruner = new SmartPruner(lines);
+      result = pruner.pruneWithIndices(selection.indicesToKeep, selection.strategy);
+      
+      if (!opts.dryRun) {
+        const proceed = await ui.confirmPrune(selection.indicesToKeep, selection.strategy);
+        if (!proceed) {
+          console.log(chalk.yellow("Cancelled"));
+          process.exit(0);
+        }
+      }
+    }
+  }
 
   if (opts.dryRun) {
-    console.log(chalk.cyan("Dry-run only ➜ no files written."));
+    console.log(chalk.cyan("\nDry-run mode - no files modified"));
     return;
   }
 
+  // Apply pruning
   const backupDir = join(homedir(), ".claude", "projects", cwdProject, "prune-backup");
   await fs.ensureDir(backupDir);
   const backup = join(backupDir, `${sessionId}.jsonl.${Date.now()}`);
+  
+  const writeSpinner = ora({
+    text: chalk.gray('⟨⟨ OPTIMIZING ⟩⟩'),
+    spinner: {
+      interval: 100,
+      frames: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    }
+  }).start();
+  
   await fs.copyFile(file, backup);
-  await fs.writeFile(file, outLines.join("\n") + "\n");
-
-  console.log(chalk.bold.green("✅ Done:"), chalk.white(`${file}`));
-  console.log(chalk.dim(`Backup at ${backup}`));
+  await fs.writeFile(file, result.outLines.join("\n") + "\n");
+  
+  const percentFreed = Math.round(((lines.length - result.outLines.length) / lines.length) * 100);
+  const beforeTokens = Math.floor(lines.join('').length / 4);
+  const afterTokens = Math.floor(result.outLines.join('').length / 4);
+  
+  writeSpinner.succeed(chalk.gray('⟨⟨ ') + chalk.green('OPTIMIZATION COMPLETE') + chalk.gray(' ⟩⟩'));
+  
+  console.log('');
+  console.log(chalk.gray('╔═══════════════════════════════════════╗'));
+  console.log(chalk.gray('║') + chalk.white('     Before: ') + chalk.white(`${Math.round(beforeTokens/1000)}k tokens`) + '         '.padEnd(26 - `${Math.round(beforeTokens/1000)}k tokens`.length) + chalk.gray('║'));
+  console.log(chalk.gray('║') + chalk.white('     After:  ') + chalk.green(`${Math.round(afterTokens/1000)}k tokens`) + '         '.padEnd(26 - `${Math.round(afterTokens/1000)}k tokens`.length) + chalk.gray('║'));
+  console.log(chalk.gray('║') + chalk.white('     Freed:  ') + chalk.green.bold(`${percentFreed}% context`) + '         '.padEnd(26 - `${percentFreed}% context`.length) + chalk.gray('║'));
+  console.log(chalk.gray('╚═══════════════════════════════════════╝'));
+  console.log(chalk.dim(`\nBackup: ${basename(backup)}`));
 }
 
 // Extract restore logic for testing

@@ -1,12 +1,25 @@
 # claude-prune
 
-A fast CLI tool for pruning Claude Code sessions.
+Intelligent context management for Claude Code sessions. This CLI tool analyzes and prunes Claude Code session transcript files to reduce context usage while preserving the most important parts of your conversation.
+
+> **Fork of [DannyAziz/claude-prune](https://github.com/DannyAziz/claude-prune)** with enhanced selection strategies and visual interface.
 
 ## Features
 
-- 🎯 **Smart Pruning**: Keep messages since the last N assistant responses
-- 🛡️ **Safe by Default**: Always preserves session summaries and metadata
-- 💾 **Auto Backup**: Creates timestamped backups before modifying files
+### Smart Interactive Pruning
+- **Work Phase Detection**: Automatically identifies distinct phases in your session (setup, debugging, implementation)
+- **Multiple Pruning Strategies**:
+  - Keep recent work only
+  - Keep bookends (beginning + end)
+  - Keep all code/errors/file edits
+  - Custom range selection
+- **Visual Session Analysis**: See exactly what's in your session before pruning
+- **Context Usage Prediction**: Know exactly how much context you'll free up
+
+### Safety Features
+- **Safe by Default**: Always preserves session summaries and metadata
+- **Auto Backup**: Creates timestamped backups before modifying files
+- **Restore Command**: Easy rollback to previous versions
 
 ## Installation
 
@@ -32,75 +45,146 @@ bun install -g claude-prune
 
 ## Usage
 
+### Interactive Mode (Recommended)
+
+Simply provide your session ID for an interactive experience:
+
 ```bash
-claude-prune <sessionId> --keep <number> [--dry-run]
+claude-prune abc-123-def
 ```
 
-### Arguments
+This will:
+1. Analyze your session to detect work phases
+2. Present you with smart pruning options
+3. Show exactly how much context each option will free
+4. Let you preview or customize the selection
 
-- `sessionId`: UUID of the Claude Code session (without .jsonl extension)
+### Quick Non-Interactive Mode
+
+For automation or quick pruning without prompts:
+
+```bash
+claude-prune abc-123-def --non-interactive
+```
+
+### Legacy Mode
+
+For backward compatibility with the original simple pruning:
+
+```bash
+claude-prune abc-123-def -k 10  # Keep last 10 assistant messages
+```
+
+### Restore from Backup
+
+Every prune operation creates a backup. To restore:
+
+```bash
+claude-prune restore abc-123-def
+```
 
 ### Options
 
-- `-k, --keep <number>`: Number of assistant messages to keep (required)
+- `-k, --keep <number>`: Use legacy mode - keep last N assistant messages
+- `--non-interactive`: Skip interactive mode, use auto strategy
 - `--dry-run`: Preview changes without modifying files
 - `-h, --help`: Show help information
 - `-V, --version`: Show version number
 
-### Examples
+## Example Session
 
-```bash
-# Keep the last 10 assistant messages and everything since then
-claude-prune abc123-def456-789 --keep 10
+```
+$ claude-prune abc-123-def
 
-# Preview what would be pruned (safe mode)
-claude-prune abc123-def456-789 --keep 5 --dry-run
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Session Analysis
+  147 messages | ~42k tokens
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Minimal pruning - keep only the last assistant message
-claude-prune abc123-def456-789 --keep 1
+Work Phases Detected:
+
+  ┌ Phase 1 (msg 1-23)     Initial setup and requirements
+  ├ Phase 2 (msg 24-89)    Debugging and error resolution
+     └─ 31 errors
+  ├ Phase 3 (msg 90-147)   Implementation and coding
+     └─ 12 file edits
+
+Choose pruning strategy:
+  [1] Keep recent work only (msg 90-147, frees 71% context)
+  [2] Keep bookends (msg 1-10 + 120-147, frees 65% context)
+  [3] Keep all code/errors (23 key messages, frees 58% context)
+  [4] Custom range selection
+  [5] View message details
+
+Selection [1]: _
 ```
 
 ## How It Works
 
-1. **Locates Session File**: Finds `~/.claude/projects/{project-path}/{sessionId}.jsonl`
-2. **Preserves Critical Data**: Always keeps the first line (session summary/metadata)
-3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
-4. **Preserves Context**: Keeps all non-message lines (tool results, system messages)
-5. **Safe Backup**: Creates `{sessionId}.bak.{timestamp}` before modifying
-6. **Interactive Confirmation**: Asks for confirmation unless using `--dry-run`
+1. **Session Analysis**: Analyzes your conversation to identify work phases and important messages
+2. **Smart Detection**: Identifies code blocks, errors, file edits, and tool usage
+3. **Pruning Strategies**: Offers multiple strategies based on your session's structure
+4. **Safe Backup**: Creates timestamped backups in `prune-backup/` before modifying
+5. **Cache Optimization**: Automatically optimizes cache tokens to reduce UI context display
 
-## File Structure
+## Technical Details
+
+### File Locations
 
 Claude Code stores sessions in:
-
 ```
 ~/.claude/projects/{project-path-with-hyphens}/{sessionId}.jsonl
 ```
 
 For example, a project at `/Users/alice/my-app` becomes:
-
 ```
 ~/.claude/projects/-Users-alice-my-app/{sessionId}.jsonl
 ```
 
+Backups are stored in:
+```
+~/.claude/projects/{project}/prune-backup/{sessionId}.jsonl.{timestamp}
+```
+
+### Architecture
+
+The tool is built with a modular architecture:
+- `src/analyzer.ts` - Session analysis and phase detection
+- `src/interactive.ts` - Interactive UI components  
+- `src/pruner.ts` - Core pruning logic
+- `src/index.ts` - CLI interface
+
 ## Development
 
 ```bash
-# Clone and install
-git clone https://github.com/dannyaziz/cc-prune.git
-cd cc-prune
+# Install dependencies
 bun install
 
 # Run tests
-bun test
+bun test          # Run all tests
+bun test --watch  # Run tests in watch mode
 
-# Build
+# Build for distribution
 bun run build
 
 # Test locally
-./dist/index.js --help
+bun run src/index.ts prune <sessionId>  # Test prune command
+bun run src/index.ts restore <sessionId> # Test restore command
+./dist/index.js --help                   # Test built CLI
 ```
+
+## Credits
+
+- Original concept and implementation by [Danny Aziz](https://github.com/DannyAziz/claude-prune)
+- Enhanced selection strategies and UI by [Eliot Paynter](https://github.com/epaynter)
+
+## Contributing
+
+Contributions welcome! The codebase is well-tested and documented. Please ensure:
+- All tests pass (`bun test`)
+- New features include tests
+- Code follows existing patterns
 
 ## License
 
-MIT © Danny Aziz
+MIT
